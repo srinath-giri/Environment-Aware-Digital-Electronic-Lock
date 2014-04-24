@@ -1,17 +1,19 @@
 
 /*
 Project 3 - srinathg@andrew.cmu.edu
-*/
+ */
 
 #include <EEPROM.h>
 #include <Servo.h>
 #include <SipHash_2_4.h>
 #include <Keypad.h>
+#include <LiquidCrystal.h>
+#include <TinyGPS.h>
 
 #define LOCKED 0xFF
 #define UNLOCKED 0x00
-#define LOCK_KEY '#'
-#define UNLOCK_KEY '*'
+#define LOCK_KEY '*'
+#define UNLOCK_KEY '#'
 
 #define MIN_PIN_SIZE 4
 #define MAX_PIN_SIZE 6
@@ -20,145 +22,187 @@ Project 3 - srinathg@andrew.cmu.edu
 #define LOCK_ADDR 0x10
 #define MAX_INVALID_TRIALS 5
 
-const int lightpin = A6;
-const int temperaturepin = A5;
-const int pressurepin = A4;
-const int gpspin = A3;
+// Lock
+const int LOCK_POSITION = 90;
+const int UNLOCK_POSITION = 0;
+const int servoPin = 9;
+Servo servoMotor;
+
+// 12-Key Keypad                                                               
+//const byte ROWS = 4;
+//const byte COLS = 3;
+//char keys[ROWS][COLS] = {
+//  { '1','2','3'  },
+//  { '4','5','6'  },
+//  { '7','8','9'  },
+//  { '#','0','*'  }
+//};
+//byte rowPins[ROWS] = { 7, 6, 5, 4 };
+//byte colPins[COLS] = { 8, 10, 13 };
+//Keypad keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );;
+
+// 8x2 LCD Output
+LiquidCrystal lcd(12, 11, 4, 5, 6, 7);
+
+// Lock / Unlock LED
 const int greenLED = 2;
 const int redLED = 3;
 
-const unsigned char key[] PROGMEM = {
+// PINS
+const int lightpin = A6;
+const int temperaturepin = A5;
+const int pressurepin = A4;
+TinyGPS gps;
+
+const int lockpin = A0;
+const int unlockpin = A1;
+const unsigned char hashKey[16] = {
   0xAF, 0xF3, 0xA2, 0x1C, 0x04, 0x5E, 0xFF, 0x98,
   0x34, 0xDC, 0xE2, 0xAA, 0x7B, 0x14, 0x45, 0xC6
 };
 
-const int LOCK_POSITION = 0;
-const int UNLOCK_POSITION = 90;
-Servo servoMotor;
-
-// 12-Key Keypad                                                               
-const byte ROWS = 4;
-const byte COLS = 3;
-char keys[ROWS][COLS] = {
-  { '1','2','3'  },
-  { '4','5','6'  },
-  { '7','8','9'  },
-  { '#','0','*'  }
-};
-byte rowPins[ROWS] = { 5, 4, 3, 2};
-byte colPins[COLS] = { 8, 7, 6};
-//Keypad keypad;
-
-
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(57600);
+  
+  pinMode(lockpin, INPUT); 
+  pinMode(unlockpin, INPUT);   
+
   pinMode(greenLED, OUTPUT); 
   pinMode(redLED, OUTPUT); 
-  //keypad = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
-  //keypad.addEventListener(keypadEvent);
-  servoMotor.attach(9);  
-  sipHash.initFromPROGMEM(key);
-  delay(300);
+
+  ledLocked(isLocked());
+  
+  lcd.begin(8, 2);
+  lcd.home();
+  lcd.noAutoscroll();
+  lcd.noCursor();
+
+  servoMotor.attach(servoPin);
+  delay(500);  
 }
 
-void loop() {
-
-  //  char keyPressed = keypad.getKey();
-  //  if (key != NO_KEY){
-  //     log("Key Pressed:",println(key);
-  //     return;
-  //  }
-  delay(10);
+void loop() { 
+  
+  if(switch_is_pressed(lockpin))
+    keypadEvent(LOCK_KEY);
+  if(switch_is_pressed(unlockpin))
+    keypadEvent(UNLOCK_KEY);
+  delay(50);
 }
 
-/*
+boolean switch_is_pressed(const int switchno) {
+  return (digitalRead(switchno) == HIGH) ;
+}
+
 void keypadEvent(KeypadEvent key) {
 
-  static byte PIN[MAX_PIN_SIZE] = { 0 }; 
-  static byte PINSize = 0;
+  logc("Key Pressed:",key);       
 
-  if (keypad.getState() == RELEASED){
-    switch (key){
-    case '0':
-    case '1':
-    case '2':
-    case '3':
-    case '4':
-    case '5':
-    case '6':
-    case '7':
-    case '8':
-    case '9':
-      PIN[PINSize++] = key;
-      break;
-    case LOCK_KEY:   
-      if(isPINValid(PIN, PINSize))
-        lock(PIN, PINSize);   
-      else 
-        PINSize = 0;
-      break;
-    case UNLOCK_KEY: 
-      if(isPINValid(PIN, PINSize))
-        unlock(PIN, PINSize); 
-      else 
-        PINSize = 0;
-      break;
+  const byte PIN[MAX_PIN_SIZE] = { 8,8,8,8 }; 
+  const byte PINSize = 4;
+
+  switch (key){
+  case LOCK_KEY:   
+    if(isPINValid(PIN, PINSize))
+    {
+      lock(PIN, PINSize);
+      showMessage("Locked");
     }
+    else 
+    {        
+      //PINSize = 0;
+      showMessage("Invalid");
+    }
+    break;
+  case UNLOCK_KEY: 
+    if(isPINValid(PIN, PINSize))
+    {
+      if(unlock(PIN, PINSize)) 
+        showMessage("UnLocked");        
+    }
+    else 
+    {
+      //PINSize = 0;
+      showMessage("Invalid");
+    }
+    break;
   }
 }
-*/
 
-boolean isPINValid(byte* PIN, byte PINSize) {
+boolean isPINValid(const byte* PIN, const byte PINSize) {
   return PINSize >= MIN_PIN_SIZE && PINSize <= MAX_PIN_SIZE;
 }
 
-void lock(byte* PIN, byte PINSize) {
-  if(isLocked()) return;
-  servoMotor.write(LOCK_POSITION);
-  delay(20);
-  save(PIN, PINSize);
-  ledRed(false);
-  ledGreen(true);
+void showPIN(const byte* PIN,const byte PINSize) {
+  lcd.clear();
+  for (unsigned int i=0; i<PINSize; i++) {
+    lcd.setCursor(i, 1);
+    lcd.write(PIN[i]);
+    log("PIN digit",PIN[i]);
+  }
 }
 
-void unlock(byte* PIN, byte PINSize) {
-  
+void showMessage(const char* msg) {
+  lcd.clear();
+  lcd.noAutoscroll();
+  lcd.noCursor();
+  for (unsigned int i=0; i<8; i++) {
+    lcd.setCursor(i, 1);
+    lcd.write(msg[i]);
+  }  
+  log(msg,0);
+}
+
+void lock(const byte* PIN, const byte PINSize) {
+  if(isLocked()) return;
+  servoLock(true);
+  save(PIN, PINSize);
+  showPIN(PIN, PINSize);
+  ledLocked(true);
+}
+
+boolean unlock(const byte* PIN, const byte PINSize) {
+
   static int invalidTrials = 0;  
-  
+
   if(!isLocked()) 
-    return;
+    return false;
   if(invalidTrials > MAX_INVALID_TRIALS) 
-    return;
+    return false;
   if(!validatePINS(PIN, PINSize)) {
     invalidTrials++;
-    return;
+    showMessage("InvalidT");
+    return false;
   }
   else invalidTrials = 0;
-  
-  servoMotor.write(UNLOCK_POSITION);
-  delay(20);
+
+  servoLock(false);
   reset();  
-  ledGreen(false);
-  ledRed(true);
+  ledLocked(false);
+  return true;
 }
 
 boolean isLocked() {
   return (EEPROM.read(LOCK_ADDR) == LOCKED);
 }
 
-boolean validatePINS(byte* PIN, byte PINSize) {
+boolean validatePINS(const byte* PIN,const byte PINSize) {
   byte measuredLight = measureLight();
   byte measuredTemperature = measureTemperature();
   byte measuredPressure = measurePressure();
-  byte measuredLocation = measureLocation();
+  long lat = 0L, lon = 0L; 
+  measureLocation(&lat, &lon);
 
   byte stored_hash[HASH_SIZE];
   for (unsigned int i = 0; i < HASH_SIZE; i++) {
     stored_hash[i] = EEPROM.read(HASH_ADDR + i);
   }
 
-  byte* computed_hash = hashPINS(PIN, PINSize, measuredLight, measuredTemperature, measuredPressure, measuredLocation);
+  showPIN(PIN, PINSize);
+  byte* computed_hash = hashPINS(PIN, PINSize, measuredLight, measuredTemperature, measuredPressure, lat, lon);
 
+  logh(stored_hash, computed_hash);
+  
   for (unsigned int i = 0; i < HASH_SIZE; i++) {
     if( stored_hash[i] != computed_hash[i] )
       return false;
@@ -167,12 +211,21 @@ boolean validatePINS(byte* PIN, byte PINSize) {
   return true;
 }
 
-void save(byte* PIN, byte PINSize) {
+void servoLock(boolean lock) {
+  if(lock)
+    servoMotor.write(LOCK_POSITION);
+  else
+    servoMotor.write(UNLOCK_POSITION);
+  delay(100);
+}
+
+void save(const byte* PIN,const byte PINSize) {
   byte measuredLight = measureLight();
   byte measuredTemperature = measureTemperature();
   byte measuredPressure = measurePressure();
-  byte measuredLocation = measureLocation();
-  byte *new_hash = hashPINS(PIN, PINSize, measuredLight, measuredTemperature, measuredPressure, measuredLocation);
+  long lat = 0L, lon = 0L; 
+  measureLocation(&lat, &lon);
+  byte *new_hash = hashPINS(PIN, PINSize, measuredLight, measuredTemperature, measuredPressure, lat, lon);
 
   for (unsigned int i = 0; i < HASH_SIZE; i++)
     EEPROM.write(HASH_ADDR + i, new_hash[i]);
@@ -185,10 +238,10 @@ void reset() {
   EEPROM.write(LOCK_ADDR, UNLOCKED);
 }
 
-byte* hashPINS(byte* PIN, byte PINSize, byte measuredLight, byte measuredTemperature, byte measuredPressure, byte measuredLocation) {
+byte* hashPINS(const byte* PIN, const byte PINSize, const byte measuredLight, const byte measuredTemperature, const byte measuredPressure, const long lat, const long lon) {
 
-  byte msg[PINSize + 4];                                
-  unsigned int msgLen = PINSize + 4;
+  byte msg[PINSize + 3 + 8];                                
+  unsigned int msgLen = PINSize + 3 + 8;
 
   for (unsigned int i=0; i<PINSize; i++)
     msg[i] = PIN[i];
@@ -196,8 +249,16 @@ byte* hashPINS(byte* PIN, byte PINSize, byte measuredLight, byte measuredTempera
   msg[PINSize    ] = measuredLight;
   msg[PINSize + 1] = measuredTemperature;
   msg[PINSize + 2] = measuredPressure;
-  msg[PINSize + 3] = measuredLocation;
+  msg[PINSize + 3] = (byte) lat;
+  msg[PINSize + 4] = (byte) lat >> 8;
+  msg[PINSize + 5] = (byte) lat >> 16;
+  msg[PINSize + 6] = (byte) lat >> 24;
+  msg[PINSize + 7] = (byte) lon;
+  msg[PINSize + 8] = (byte) lon >> 8;
+  msg[PINSize + 9] = (byte) lon >> 16;
+  msg[PINSize + 10] = (byte) lon >> 32;
 
+  sipHash.initFromRAM(hashKey);  
   for (unsigned int i=0; i<msgLen; i++) {
     sipHash.updateHash((byte)msg[i]); 
   }
@@ -212,21 +273,43 @@ byte measureLight() {
 }
 
 byte measureTemperature() {
-  byte temperature = analogRead(temperaturepin) >> 7;
+  byte temperature = 0;
+  //byte temperature = analogRead(temperaturepin) >> 7;
   log("Temperature:",temperature);
   return temperature;
 }
 
 byte measurePressure() {
-  byte pressure = analogRead(pressurepin) >> 7;
+  byte pressure = 0;
+  //byte pressure = analogRead(pressurepin) >> 7;
   log("Pressure:",pressure);
   return pressure;
 }
 
-byte measureLocation() {
-  byte location = analogRead(gpspin) >> 7;
-  log("Location:",location);
-  return location;
+boolean measureLocation(long* lat, long* lon) {
+    
+  boolean validPosition = false;
+  unsigned long fix_age = 0L;
+  for (unsigned long start = millis(); millis() - start < 2000;) 
+  {
+  while(Serial.available())
+  {
+    char c = Serial.read();
+    if (gps.encode(c))
+      validPosition = true;
+  }  
+  }
+  
+  if(validPosition)
+    { 
+      gps.get_position(lat, lon, &fix_age);    
+      *lat = *lat / 10000;
+      *lon = *lon / 10000;
+    }
+  log("Latitude:",*lat);
+  log("Longditude:",*lon);
+  
+  return validPosition;
 }
 
 void ledGreen(boolean on) {
@@ -244,4 +327,38 @@ void log(const char *name, int value) {
   Serial.print("\n");
 }
 
+void log(const char *name, long value) {
+  Serial.print(name);
+  Serial.print("\t");
+  Serial.print(value);
+  Serial.print("\n");
+}
+
+void logc(const char *name, char value) {
+  Serial.print(name);
+  Serial.print("\t");
+  Serial.print(value);
+  Serial.print("\n");
+}
+
+void logh(const byte* stored_hash, const byte* computed_hash) {
+  Serial.println("Hash Comparison");
+  for (unsigned int i = 0; i < HASH_SIZE; i++) {
+    Serial.print(stored_hash[i]); 
+    Serial.print("-");
+    Serial.print(computed_hash[i]);
+    Serial.print("\n");
+  }
+}
+
+void ledLocked(boolean isLocked) {
+  if(isLocked) {
+    ledGreen(true);
+    ledRed(false);
+  }
+  else {
+    ledGreen(false);
+    ledRed(true);
+  }
+}
 
